@@ -9,6 +9,7 @@ import torch
 from flashgrpo.decoding.acceptance import exact_accept_path, sample_from_logits
 from flashgrpo.decoding.kv_extraction import extract_accepted_path_kv
 from flashgrpo.decoding.medusa_tree import CandidateTree, TreePlan, build_batch_trees, dense_node_count, plan_tree
+from flashgrpo.decoding.reflex import LMHeadFeedback, PredictionBuffer, ReflexBatchStats, ReflexStateManager
 from flashgrpo.decoding.tree_attention import build_tree_attention_inputs
 from flashgrpo.models.qwen_flashgrpo_wrapper import (
     autocast_dtype,
@@ -52,6 +53,13 @@ class FlashMedusaConfig:
     adaptive_confidence_low: float = 0.15
     adaptive_confidence_high: float = 0.45
     adaptive_min_topk_by_depth: tuple[int, ...] = (1, 1, 1)
+    reflex_enabled: bool = False
+    reflex_fast_state_dim: int = 128
+    reflex_beta: float = 0.95
+    reflex_eta: float = 0.1
+    reflex_top_m_feedback: int = 64
+    reflex_feedback_clip_norm: float = 8.0
+    reflex_fast_state_clip_norm: float = 8.0
 
 
 class FlashMedusaDecoder:
@@ -66,6 +74,13 @@ class FlashMedusaDecoder:
             raise ValueError(f"Unsupported cache_update_mode={config.cache_update_mode}")
         if config.proposal_mode not in {"medusa", "chain"}:
             raise ValueError(f"Unsupported proposal_mode={config.proposal_mode}")
+
+    def _reflex_enabled(self) -> bool:
+        return (
+            bool(self.config.reflex_enabled)
+            and int(self.config.reflex_fast_state_dim) > 0
+            and getattr(self.medusa_heads, "reflex_fast_state_dim", 0) > 0
+        )
 
     def _confidence_from_logits(self, logits: torch.Tensor) -> float:
         cfg = self.config
@@ -135,6 +150,7 @@ class FlashMedusaDecoder:
         *,
         lm_head,
         embedding_layer,
+        fast_state: torch.Tensor | None = None,
     ) -> tuple[list[CandidateTree], TreePlan, dict]:
         cfg = self.config
         device = current_hidden.device
@@ -150,13 +166,18 @@ class FlashMedusaDecoder:
             parent_states = self.medusa_heads.chain_next_state(current_hidden.detach(), root_tokens, embedding_layer)
         parent_rows = torch.arange(batch, dtype=torch.long, device=device)
         parent_node_ids = [0 for _ in range(batch)]
+        parent_fast_state = fast_state
         adapted_topk: list[int] = []
         confidences: list[float] = []
+        record_logits: list[torch.Tensor] = []
 
         for depth_idx, base_k in enumerate(plan.topk_by_depth):
             if parent_states.numel() == 0:
                 break
-            logits = self.medusa_heads.chain_logits_from_state(parent_states, lm_head).float()
+            logit_states = self.medusa_heads.add_reflex_delta(parent_states, parent_fast_state, depth_idx)
+            logits = self.medusa_heads.chain_logits_from_state(logit_states, lm_head).float()
+            if depth_idx == 0 and parent_rows.numel() == batch and bool((parent_rows == torch.arange(batch, device=device)).all().item()):
+                record_logits.append(logits.detach())
             confidence = self._confidence_from_logits(logits)
             confidences.append(confidence)
             k = self._topk_from_confidence(confidence, int(base_k), depth_idx)
@@ -195,6 +216,7 @@ class FlashMedusaDecoder:
                 token_tensor,
                 embedding_layer,
             )
+            parent_fast_state = parent_fast_state.index_select(0, parent_index) if parent_fast_state is not None else None
             parent_rows = torch.tensor(next_rows, dtype=torch.long, device=device)
             parent_node_ids = next_node_ids
             del logits, values, indices, parent_index, token_tensor
@@ -205,7 +227,7 @@ class FlashMedusaDecoder:
         ]
         actual_nodes = max((tree.node_count for tree in trees), default=1)
         chain_plan = self._plan_with_topk(plan, adapted_topk, actual_nodes=actual_nodes)
-        return trees, chain_plan, {"confidence": confidences, "topk": adapted_topk}
+        return trees, chain_plan, {"confidence": confidences, "topk": adapted_topk, "record_logits": record_logits}
 
     def _last_valid_hidden(self, hidden_states: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         last_idx = attention_mask.long().sum(dim=-1).clamp_min(1) - 1
@@ -272,6 +294,26 @@ class FlashMedusaDecoder:
         active_original_indices = list(range(total_sequences))
         full_attention_mask = attention_mask.long()
         logical_lens = mask_logical_lengths(full_attention_mask)
+        reflex_enabled = self._reflex_enabled()
+        reflex_manager = (
+            ReflexStateManager(
+                total_sequences,
+                int(cfg.reflex_fast_state_dim),
+                device=device,
+                beta=float(cfg.reflex_beta),
+                eta=float(cfg.reflex_eta),
+                max_norm=float(cfg.reflex_fast_state_clip_norm),
+            )
+            if reflex_enabled
+            else None
+        )
+        prediction_buffer = PredictionBuffer() if reflex_enabled else None
+        lm_feedback = (
+            LMHeadFeedback(lm_head, max_hidden_norm=float(cfg.reflex_feedback_clip_norm))
+            if reflex_enabled
+            else None
+        )
+        reflex_stats = ReflexBatchStats(num_heads=min(cfg.num_medusa_heads, self.medusa_heads.num_heads))
 
         total_acc_length = 0
         total_decoded_steps = 0
@@ -300,6 +342,8 @@ class FlashMedusaDecoder:
             remaining = max_length - logical_lens
             if not bool((remaining > 0).any().item()):
                 break
+            old_logical_lens = logical_lens.clone()
+            active_fast_state = reflex_manager.get(active_original_indices) if reflex_manager is not None else None
 
             root_tokens = sample_from_logits(
                 current_logits,
@@ -334,11 +378,13 @@ class FlashMedusaDecoder:
                             plan,
                             lm_head=lm_head,
                             embedding_layer=base.get_input_embeddings(),
+                            fast_state=active_fast_state,
                         )
                     if statistical_time and torch.cuda.is_available():
                         torch.cuda.synchronize()
                     medusa_head_time += time.time() - head_start
                     medusa_logits = []
+                    record_logits = adaptive_tree_stats.pop("record_logits", [])
                 else:
                     if statistical_time and torch.cuda.is_available():
                         torch.cuda.synchronize()
@@ -348,16 +394,19 @@ class FlashMedusaDecoder:
                             current_hidden.detach(),
                             lm_head=lm_head,
                             max_heads=plan.active_heads,
+                            fast_state=active_fast_state,
                         )
                     if statistical_time and torch.cuda.is_available():
                         torch.cuda.synchronize()
                     medusa_head_time += time.time() - head_start
                     plan, adaptive_tree_stats = self._adapt_plan_from_logits(medusa_logits, plan)
                     trees = build_batch_trees(root_tokens, medusa_logits, plan)
+                    record_logits = medusa_logits
                 proposal_mode_used = "chain" if use_chain else "medusa"
                 adaptive_tree_stats_last = adaptive_tree_stats
             else:
                 medusa_logits = []
+                record_logits = []
                 proposal_mode_used = "target_only"
                 adaptive_tree_stats_last = {}
                 plan = TreePlan(
@@ -369,6 +418,13 @@ class FlashMedusaDecoder:
                     layout=cfg.tree_layout,
                 )
                 trees = build_batch_trees(root_tokens, medusa_logits, plan)
+            if prediction_buffer is not None and record_logits:
+                prediction_buffer.add_from_logits(
+                    sequence_ids=active_original_indices,
+                    anchor_positions=old_logical_lens,
+                    logits_by_horizon=record_logits[: plan.active_heads],
+                    top_m=int(cfg.reflex_top_m_feedback),
+                )
             tree_plan_last = {
                 "B_cur": active_bsz,
                 "node_budget_per_seq": plan.node_budget_per_seq,
@@ -477,6 +533,30 @@ class FlashMedusaDecoder:
                 original_idx = active_original_indices[row]
                 generated[original_idx].extend(tokens)
 
+            if prediction_buffer is not None and reflex_manager is not None and lm_feedback is not None:
+                mature_records = []
+                mature_true_tokens = []
+                mature_seq_ids = []
+                mature_accepted_flags = []
+                for row, tokens in enumerate(accepted_per_row):
+                    seq_id = int(active_original_indices[row])
+                    anchor_pos = int(old_logical_lens[row].item())
+                    accepted_len = len(tokens)
+                    for offset, token in enumerate(tokens, start=1):
+                        target_pos = anchor_pos + offset
+                        records = prediction_buffer.pop_mature(seq_id, target_pos)
+                        for record in records:
+                            mature_records.append(record)
+                            mature_true_tokens.append(int(token))
+                            mature_seq_ids.append(seq_id)
+                            mature_accepted_flags.append(record.anchor_pos == anchor_pos and int(record.horizon) <= accepted_len)
+                if mature_records:
+                    hidden_feedback, true_probs = lm_feedback.compute_batch(mature_records, mature_true_tokens)
+                    with torch.no_grad():
+                        small_feedback = self.medusa_heads.feedback_to_fast_state(hidden_feedback).float()
+                    feedback_norms = reflex_manager.update(mature_seq_ids, small_feedback)
+                    reflex_stats.add_records(mature_records, true_probs, mature_accepted_flags, feedback_norms)
+
             new_attention_mask = torch.cat([full_attention_mask, valid_ext], dim=1)
             use_extract = (
                 cfg.cache_update_mode == "extract_path"
@@ -558,6 +638,10 @@ class FlashMedusaDecoder:
 
             keep_rows = [idx for idx, done in enumerate(finished_flags) if not done]
             if len(keep_rows) != active_bsz:
+                if prediction_buffer is not None:
+                    done_seq_ids = [active_original_indices[idx] for idx, done in enumerate(finished_flags) if done]
+                    for seq_id in done_seq_ids:
+                        prediction_buffer.clear_sequence(seq_id)
                 if keep_rows:
                     keep = torch.tensor(keep_rows, dtype=torch.long, device=device)
                     past_key_values = select_cache_batch(past_key_values, keep, causal_lm=self.target_model)
@@ -574,6 +658,13 @@ class FlashMedusaDecoder:
         total_time = time.time() - total_start
         accept_rate = total_accepted_medusa_tokens / max(total_proposed_medusa_tokens, 1)
         avg_accept = total_acc_length / max(total_decoded_steps, 1)
+        reflex_metrics = reflex_stats.to_dict()
+        reflex_metrics["enabled"] = bool(reflex_enabled)
+        reflex_metrics["pending_prediction_records"] = len(prediction_buffer) if prediction_buffer is not None else 0
+        if reflex_manager is not None:
+            reflex_metrics.update(reflex_manager.norm_stats())
+        else:
+            reflex_metrics.update({"fast_state_norm_mean": 0.0, "fast_state_norm_p95": 0.0})
         return {
             "generated_token_ids": generated,
             "max_sequence_length": max_sequence_length,
@@ -608,4 +699,6 @@ class FlashMedusaDecoder:
             "medusa_head_time_cost": medusa_head_time,
             "draft_time_cost": medusa_head_time,
             "check_time_cost": 0.0,
+            "reflex_metrics": reflex_metrics,
+            "reflex_head_metrics": reflex_metrics.get("per_head", {}),
         }

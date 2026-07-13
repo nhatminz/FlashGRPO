@@ -1,0 +1,45 @@
+inherits: flashgrpo_qwen25_1p5b_simplelrabel3to5.yaml
+
+method: reflexgrpo
+run_name: reflexgrpo_qwen25_1p5b_simplelrabel3to5
+aux_head_checkpoint: outputs/flashgrpo_medusa_sharegpt_qwen25_1p5b_chain_5ep/step14000
+
+flashgrpo:
+  chain_enable_after: 0
+
+reflex:
+  enabled: true
+  fast_state_dim: 128
+  update_type: ema
+  beta: 0.95
+  eta: 0.05
+  top_m_feedback: 32
+  use_top_m_feedback: true
+  detach_feedback: true
+  init_scale: 0.20
+  feedback_clip_norm: 8.0
+  fast_state_clip_norm: 6.0
+
+aux_update:
+  mode: reliability_triggered
+  interval: 10
+  steps: 1
+  reject_weight: 1.0
+  drift_threshold: 8.0
+  ema_beta: 0.90
+  min_mature_records: 64
+  update_future_heads: true
+  update_fast_state_injections: false
+  update_feedback_projection: false
+  update_updater: false
+  update_backbone: false
+  update_lm_head: false
+
+checkpoint:
+  save_aux_every_grpo_iters: 100
+  save_aux_on_triggered_update: false
+  min_iters_between_aux_trigger_saves: 50
+  keep_last_aux_checkpoints: 3
+
+logging:
+  log_dir: logs/flashgrpo/reflexgrpo_qwen25_1p5b_simplelrabel3to5

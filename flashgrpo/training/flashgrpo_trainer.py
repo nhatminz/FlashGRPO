@@ -19,6 +19,7 @@ from flashgrpo.decoding.flash_medusa_decoder import FlashMedusaConfig, FlashMedu
 from flashgrpo.models.medusa_heads import MedusaHeads
 from flashgrpo.models.qwen_flashgrpo_wrapper import autocast_dtype, unwrap_causal_lm
 from flashgrpo.training.online_medusa_trainer import OnlineMedusaConfig, OnlineMedusaTrainer
+from flashgrpo.training.reflex_aux import ReliabilityTracker
 from flashgrpo.utils.config import save_resolved_config
 from flashgrpo.utils.gpu_monitor import GpuMonitor
 from flashgrpo.utils.metrics import MetricsLogger
@@ -268,6 +269,7 @@ def _merge_generation_outputs(rows: list[dict]) -> dict:
     total_proposed = sum(int(row.get("total_proposed_medusa_tokens", row.get("total_proposed_draft_tokens", 0))) for row in rows)
     total_verify = sum(int(row.get("total_verify_rounds", 0)) for row in rows)
     total_time = sum(float(row.get("total_time_cost", 0.0) or 0.0) for row in rows)
+    reflex_metrics = _merge_reflex_metrics([row.get("reflex_metrics", {}) for row in rows])
     out = {
         "generated_token_ids": generated,
         "max_sequence_length": max((int(row.get("max_sequence_length", 0)) for row in rows), default=0),
@@ -303,8 +305,52 @@ def _merge_generation_outputs(rows: list[dict]) -> dict:
         "medusa_head_time_cost": sum(float(row.get("medusa_head_time_cost", 0.0) or 0.0) for row in rows),
         "draft_time_cost": sum(float(row.get("draft_time_cost", 0.0) or 0.0) for row in rows),
         "check_time_cost": sum(float(row.get("check_time_cost", 0.0) or 0.0) for row in rows),
+        "reflex_metrics": reflex_metrics,
+        "reflex_head_metrics": reflex_metrics.get("per_head", {}),
     }
     return out
+
+
+def _merge_reflex_metrics(rows: list[dict]) -> dict:
+    rows = [row for row in rows if row]
+    if not rows:
+        return {}
+    per_head: dict[str, dict] = {}
+    total_updates = sum(int(row.get("num_reflex_updates", 0) or 0) for row in rows)
+    feedback_weight = total_updates if total_updates > 0 else 1
+    feedback_mean = sum(float(row.get("feedback_norm_mean", 0.0) or 0.0) * int(row.get("num_reflex_updates", 0) or 0) for row in rows) / max(feedback_weight, 1)
+    feedback_p95 = max(float(row.get("feedback_norm_p95", 0.0) or 0.0) for row in rows)
+    fast_norm_mean = sum(float(row.get("fast_state_norm_mean", 0.0) or 0.0) for row in rows) / max(len(rows), 1)
+    fast_norm_p95 = max(float(row.get("fast_state_norm_p95", 0.0) or 0.0) for row in rows)
+    for row in rows:
+        for head, metrics in (row.get("per_head") or {}).items():
+            out = per_head.setdefault(str(head), {"mature": 0, "accepted": 0, "ce_sum": 0.0})
+            mature = int(metrics.get("mature", 0) or 0)
+            out["mature"] += mature
+            out["accepted"] += int(metrics.get("accepted", 0) or 0)
+            out["ce_sum"] += float(metrics.get("mature_ce", 0.0) or 0.0) * mature
+    for head, metrics in per_head.items():
+        mature = int(metrics.pop("mature", 0))
+        accepted = int(metrics.pop("accepted", 0))
+        ce_sum = float(metrics.pop("ce_sum", 0.0))
+        acc = accepted / max(mature, 1)
+        per_head[head] = {
+            "mature": mature,
+            "accepted": accepted,
+            "acceptance_rate": acc,
+            "rejection_rate": 1.0 - acc if mature else 0.0,
+            "mature_ce": ce_sum / max(mature, 1),
+        }
+    return {
+        "enabled": any(bool(row.get("enabled", False)) for row in rows),
+        "num_reflex_updates": int(total_updates),
+        "feedback_norm_mean": feedback_mean,
+        "feedback_norm_p95": feedback_p95,
+        "fast_state_norm_mean": fast_norm_mean,
+        "fast_state_norm_p95": fast_norm_p95,
+        "pending_prediction_records": sum(int(row.get("pending_prediction_records", 0) or 0) for row in rows),
+        "per_head": per_head,
+    }
 
 
 def generate_with_oom_retry(
@@ -368,6 +414,7 @@ def generate_with_oom_retry(
 def _make_flash_config(config: dict[str, Any]) -> FlashMedusaConfig:
     fg = config.get("flashgrpo", {})
     gen = config.get("generation", {})
+    reflex = config.get("reflex", {})
     return FlashMedusaConfig(
         num_medusa_heads=int(fg.get("num_medusa_heads", 3)),
         tree_mode=fg.get("tree_mode", "concurrency_aware"),
@@ -395,6 +442,13 @@ def _make_flash_config(config: dict[str, Any]) -> FlashMedusaConfig:
         adaptive_confidence_low=float(fg.get("adaptive_confidence_low", 0.15)),
         adaptive_confidence_high=float(fg.get("adaptive_confidence_high", 0.45)),
         adaptive_min_topk_by_depth=tuple(fg.get("adaptive_min_topk_by_depth", [1, 1, 1])),
+        reflex_enabled=bool(reflex.get("enabled", False)),
+        reflex_fast_state_dim=int(reflex.get("fast_state_dim", 128)),
+        reflex_beta=float(reflex.get("beta", 0.95)),
+        reflex_eta=float(reflex.get("eta", 0.1)),
+        reflex_top_m_feedback=int(reflex.get("top_m_feedback", 64)),
+        reflex_feedback_clip_norm=float(reflex.get("feedback_clip_norm", 8.0)),
+        reflex_fast_state_clip_norm=float(reflex.get("fast_state_clip_norm", 8.0)),
     )
 
 
@@ -456,6 +510,9 @@ def run_training(config: dict[str, Any]) -> None:
 
     base = unwrap_causal_lm(target_model)
     fg = config.get("flashgrpo", {})
+    reflex_cfg = config.get("reflex", {})
+    reflex_enabled = bool(reflex_cfg.get("enabled", False))
+    reflex_fast_state_dim = int(reflex_cfg.get("fast_state_dim", 128)) if reflex_enabled else 0
     medusa_dtype = _dtype_from_name(str(fg.get("head_dtype", "fp32")), default=torch.float32)
     medusa_heads = MedusaHeads(
         hidden_size=hf_config.hidden_size,
@@ -467,8 +524,14 @@ def run_training(config: dict[str, Any]) -> None:
         medusa_loss_decay=float(fg.get("medusa_loss_decay", 0.8)),
         chain_bottleneck_ratio=int(fg.get("chain_bottleneck_ratio", 8)),
         chain_gate_init=float(fg.get("chain_gate_init", -3.0)),
+        reflex_fast_state_dim=reflex_fast_state_dim,
+        reflex_init_scale=float(reflex_cfg.get("init_scale", 0.25)),
     ).cuda()
-    medusa_checkpoint = str(fg.get("medusa_heads_checkpoint", "") or fg.get("load_medusa_path", ""))
+    medusa_checkpoint = str(
+        fg.get("medusa_heads_checkpoint", "")
+        or config.get("aux_head_checkpoint", "")
+        or fg.get("load_medusa_path", "")
+    )
     require_pretrained_heads = bool(fg.get("require_pretrained_heads", False))
     allow_random_init = bool(fg.get("allow_random_init", not require_pretrained_heads))
     if medusa_checkpoint:
@@ -479,6 +542,8 @@ def run_training(config: dict[str, Any]) -> None:
             lm_head=base.lm_head,
             chain_bottleneck_ratio=int(fg.get("chain_bottleneck_ratio", 8)),
             chain_gate_init=float(fg.get("chain_gate_init", -3.0)),
+            reflex_fast_state_dim=reflex_fast_state_dim,
+            reflex_init_scale=float(reflex_cfg.get("init_scale", 0.25)),
         ).cuda()
         print(f"Loaded MEDUSA heads from {medusa_checkpoint}")
     elif require_pretrained_heads and not allow_random_init:
@@ -512,6 +577,15 @@ def run_training(config: dict[str, Any]) -> None:
             chain_loss_max_depth=int(fg.get("chain_loss_max_depth", int(fg.get("num_medusa_heads", 3)))),
             chain_bootstrap_from_medusa=bool(fg.get("chain_bootstrap_from_medusa", True)),
         ),
+    )
+    aux_cfg = config.get("aux_update", {})
+    aux_tracker = ReliabilityTracker(
+        mode=str(aux_cfg.get("mode", "reliability_triggered")),
+        interval=int(aux_cfg.get("interval", max(1, int(fg.get("medusa_train_every", 1))))),
+        reject_weight=float(aux_cfg.get("reject_weight", 1.0)),
+        drift_threshold=float(aux_cfg.get("drift_threshold", 8.0)),
+        ema_beta=float(aux_cfg.get("ema_beta", 0.9)),
+        min_mature_records=int(aux_cfg.get("min_mature_records", 64)),
     )
     decoder = FlashMedusaDecoder(target_model, medusa_heads, tokenizer, _make_flash_config(config))
 
@@ -571,6 +645,11 @@ def run_training(config: dict[str, Any]) -> None:
         "start_rollout_count": start_rollout_count,
         "baseline_source": "not_available",
         "method": "flashgrpo",
+        "reflex_enabled": bool(reflex_enabled),
+        "reflex_fast_state_dim": int(reflex_fast_state_dim),
+        "aux_head_checkpoint": medusa_checkpoint,
+        "aux_update_mode": str(aux_cfg.get("mode", "reliability_triggered")),
+        "aux_update_interval": int(aux_cfg.get("interval", max(1, int(fg.get("medusa_train_every", 1))))),
     })
 
     acc = Accumulator(
@@ -657,8 +736,8 @@ def run_training(config: dict[str, Any]) -> None:
             length_mean = mean(token_lengths) if token_lengths else 0.0
 
             head_stats = {"medusa_loss": 0.0, "head_update_time": 0.0, "head_update_tokens": 0}
-            medusa_train_every = max(1, int(fg.get("medusa_train_every", 1)))
-            if bool(fg.get("online_medusa", True)) and batch_idx % medusa_train_every == 0:
+            aux_decision = aux_tracker.update(outputs.get("reflex_metrics", {}), rollout_count)
+            if bool(fg.get("online_medusa", True)) and aux_decision.triggered:
                 pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
                 head_ids, head_mask, head_loss_mask = build_medusa_update_batch(
                     input_ids.detach().cpu(),
@@ -685,6 +764,11 @@ def run_training(config: dict[str, Any]) -> None:
                     head_stats["head_update_tokens_per_sec"] = head_stats["head_update_tokens"] / head_stats["head_update_time"]
                 total_head_update_time += head_stats.get("head_update_time", 0.0)
                 maybe_empty_cuda_cache(config)
+            head_stats["aux_update_evaluated"] = bool(aux_decision.evaluated)
+            head_stats["aux_update_triggered"] = bool(aux_decision.triggered)
+            head_stats["aux_update_reason"] = aux_decision.reason
+            head_stats["aux_triggered_heads"] = aux_decision.triggered_heads
+            head_stats["aux_drift_scores"] = aux_decision.drift_scores
 
             for prompt_idx in range(len(answers)):
                 decoded_for_prompt = []
@@ -742,6 +826,12 @@ def run_training(config: dict[str, Any]) -> None:
                 "head_update_tokens": head_stats.get("head_update_tokens", 0),
                 "head_update_tokens_per_sec": head_stats.get("head_update_tokens_per_sec", 0.0),
                 "head_update_time_ratio_vs_total": head_stats.get("head_update_time", 0.0) / max(outputs["total_time_cost"] + head_stats.get("head_update_time", 0.0), 1e-9),
+                "aux_update_evaluated": head_stats.get("aux_update_evaluated", False),
+                "aux_update_triggered": head_stats.get("aux_update_triggered", False),
+                "aux_update_reason": head_stats.get("aux_update_reason", ""),
+                "aux_triggered_heads": head_stats.get("aux_triggered_heads", []),
+                "aux_drift_scores": head_stats.get("aux_drift_scores", {}),
+                "reflex": outputs.get("reflex_metrics", {}),
                 "mean_response_length": length_mean,
                 "response_length_variance": float(np.var(token_lengths)) if token_lengths else 0.0,
                 "response_length_stdev": length_stdev,
