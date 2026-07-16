@@ -1,0 +1,3 @@
+inherits: ../flashgrpo_qwen25_1p5b_simplelrabel3to5.yaml
+flashgrpo:
+  acceptance: exact_target

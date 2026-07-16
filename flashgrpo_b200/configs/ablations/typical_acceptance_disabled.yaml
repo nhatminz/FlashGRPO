@@ -1,0 +1,6 @@
+inherits: ../flashgrpo_qwen25_1p5b_simplelrabel3to5.yaml
+flashgrpo:
+  acceptance: exact_target
+  typical:
+    enabled: false
+    TODO: typical acceptance is intentionally disabled in v1 main runs.

@@ -1,0 +1,152 @@
+method: flashgrpo
+run_name: flashgrpo_qwen25_1p5b_simplelrabel3to5
+seed: 42
+
+model:
+  model_dir: models/Qwen2.5-1.5B-Instruct
+  model_type: qwen2
+  dtype: fp16
+  attn_implementation: flash_attention_2
+
+data:
+  train_option: simplelr_abel_level3to5
+
+generation:
+  do_sample: true
+  temperature: 1.0
+  top_p: 0.95
+  top_k:
+  max_prompt_length: 4096
+  max_length: 2048
+  repeated_generate_nums: 8
+
+training:
+  batch_size: 8
+  num_epochs: 1
+  start_epoch: 0
+  start_batch: 0
+  start_used_items: 0
+  start_rollout_count: 0
+  sample_num: 100
+  max_train_samples: 0
+  accumulation_steps: 4
+  grpo_iteration_num: 1
+  target_lr: 1.0e-6
+  beta: 0.04
+  epsilon: 0.1
+  max_training_padding_gap: 256
+  max_training_token: 2048
+  logps_chunk_size: 256
+  load_lora_path: ""
+  save_steps: 10
+  save_on_exception: true
+  num_workers: 4
+  persistent_workers: true
+  saved_model_dir: outputs/flashgrpo_qwen25_1p5b_simplelrabel3to5/target_lora
+  saved_medusa_dir: outputs/flashgrpo_qwen25_1p5b_simplelrabel3to5/medusa_heads
+
+lora:
+  r: 64
+  alpha: 32
+  dropout: 0.0
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+flashgrpo:
+  enabled: true
+  num_medusa_heads: 3
+  tie_lm_head: true
+  head_dtype: fp32
+  medusa_heads_checkpoint: ""
+  require_pretrained_heads: true
+  allow_random_init: false
+  online_medusa: true
+  tree_mode: concurrency_aware
+  tree_layout: dense
+  acceptance: exact_target
+  enable_medusa_spec_after: 0
+  proposal_mode: chain
+  chain_enable_after: 96
+  chain_bootstrap_from_medusa: true
+  chain_bottleneck_ratio: 8
+  chain_gate_init: -2.0
+  adaptive_tree_enabled: true
+  adaptive_confidence_metric: top1_prob
+  adaptive_confidence_quantile: 0.25
+  adaptive_confidence_low: 0.20
+  adaptive_confidence_high: 0.70
+  adaptive_min_topk_by_depth: [1, 1, 1]
+  typical:
+    enabled: false
+  medusa_training_mode: head_only
+  cache_update_mode: extract_path
+  allow_recompute_fallback: true
+  clone_tree_cache: true
+  cpeak_nodes: 128
+  min_tree_nodes_per_seq: 1
+  max_tree_nodes_per_seq: 24
+  max_tree_depth: 4
+  fixed_tree_topk_by_depth: [4, 3, 2]
+  measure_baseline_generation: false
+  log_gpu_metrics: true
+  gpu_poll_interval_s: 10.0
+  empty_cache_enabled: true
+  empty_cache_after_target_train: true
+  empty_cache_threshold_mb: 18000
+  empty_cache_reserved_ratio: 1.4
+  generation_oom_split_retry: true
+  generation_oom_max_splits: 3
+  medusa_lr: 5.0e-4
+  medusa_adam_eps: 1.0e-6
+  medusa_weight_decay: 0.0
+  medusa_train_every: 2
+  medusa_update_steps_per_iter: 1
+  medusa_microbatch_size: 2
+  medusa_max_tokens_per_update: 4096
+  medusa_loss_decay: 0.8
+  medusa_loss_chunk_size: 128
+  chain_loss_weight: 0.30
+  chain_loss_max_depth: 3
+  load_medusa_path: ""
+
+logging:
+  log_dir: logs/flashgrpo/flashgrpo_qwen25_1p5b_simplelrabel3to5
+  append: false
+  statistical_time: false
+
+aux_update:
+  mode: reliability_triggered
+  interval: 1
+  steps: 1
+  reject_weight: 1.0
+  drift_threshold: 0.5
+  ce_tau: 4.0
+  ce_weight: 0.5
+  ema_beta: 0.90
+  min_mature_records: 128
+  head_weight_max: 1.5
+  only_triggered_heads: true
+  max_pending_jobs: 4
+  reflex_cache_enabled: true
+  require_reflex_cache: true
+  max_cached_records: 4096
+  reflex_record_microbatch_size: 256
+  rollback_nonfinite_update: true
+  update_future_heads: true
+  update_fast_state_injections: true
+  update_feedback_projection: false
+  update_updater: false
+  update_backbone: false
+  update_lm_head: false
+
+checkpoint:
+  save_aux_every_grpo_iters: 100
+  save_aux_on_triggered_update: true
+  min_iters_between_aux_trigger_saves: 50
+  keep_last_aux_checkpoints: 2

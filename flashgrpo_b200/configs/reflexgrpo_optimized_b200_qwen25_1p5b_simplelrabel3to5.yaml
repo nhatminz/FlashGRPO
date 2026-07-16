@@ -1,0 +1,40 @@
+inherits: reflexgrpo_optimized_qwen25_1p5b_simplelrabel3to5.yaml
+
+method: reflexgrpo_optimized_b200
+run_name: reflexgrpo_optimized_b200_qwen25_1p5b_simplelrabel3to5
+aux_head_checkpoint: outputs/flashgrpo_pretrained_extractkv/medusa_heads/step50
+
+model:
+  dtype: bf16
+  attn_implementation: flash_attention_2
+
+training:
+  # Keep batch_size * accumulation_steps = 32 so each GRPO policy update is
+  # comparable with the 3090/A6000 config, while each rollout is wider on B200.
+  batch_size: 16
+  accumulation_steps: 2
+  max_training_token: 8192
+  max_training_padding_gap: 1024
+  logps_chunk_size: 512
+  num_workers: 8
+  persistent_workers: true
+  saved_model_dir: outputs/reflexgrpo_optimized_b200_qwen25_1p5b_simplelrabel3to5/target_lora
+  saved_medusa_dir: outputs/reflexgrpo_optimized_b200_qwen25_1p5b_simplelrabel3to5/medusa_heads
+
+flashgrpo:
+  # B200 can carry a wider speculative tree. With batch_size=16 and
+  # repeated_generate_nums=8, active concurrency starts around 128.
+  cpeak_nodes: 768
+  max_tree_nodes_per_seq: 32
+  fixed_tree_topk_by_depth: [4, 3, 2]
+  head_dtype: fp32
+  gpu_poll_interval_s: 20.0
+  empty_cache_after_target_train: false
+  empty_cache_threshold_mb: 140000
+  empty_cache_reserved_ratio: 1.6
+
+aux_update:
+  reflex_record_microbatch_size: 128
+
+logging:
+  log_dir: logs/flashgrpo_b200/reflexgrpo_optimized_b200_qwen25_1p5b_simplelrabel3to5

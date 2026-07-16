@@ -1,0 +1,102 @@
+inherits: flashgrpo_qwen25_1p5b_simplelrabel3to5.yaml
+
+method: reflexgrpo_optimized
+run_name: reflexgrpo_optimized_qwen25_1p5b_simplelrabel3to5
+aux_head_checkpoint: outputs/flashgrpo_pretrained_extractkv/medusa_heads/step50
+
+flashgrpo:
+  proposal_mode: medusa
+  chain_enable_after: 1000000000
+  chain_loss_weight: 0.0
+  chain_loss_max_depth: 0
+  medusa_lr: 1.0e-5
+  medusa_weight_decay: 0.0
+  medusa_adam_eps: 1.0e-6
+  online_medusa: true
+
+  # Confidence only controls the candidate budget. Target verification remains exact.
+  adaptive_tree_enabled: true
+  adaptive_confidence_metric: top1_prob
+  adaptive_confidence_quantile: 0.25
+  adaptive_confidence_low: 0.20
+  adaptive_confidence_high: 0.70
+  adaptive_min_topk_by_depth: [1, 1, 1]
+
+reflex:
+  enabled: true
+  state_space: hidden
+  state_dtype: float32
+
+  feedback_enabled: true
+  proposal_injection_enabled: true
+  proposal_injection_scale: 1.0
+  proposal_injection_after: 0
+  proposal_injection_warmup: 0
+
+  half_life_tokens: 48
+  eta: 0.5
+  state_rms_clip: 2.0
+  numerical_reset_rms: 2.5
+
+  relative_rms_delta_base: 0.01
+  warmup_effective_updates: 16
+  magnitude_gate_floor: 0.25
+
+  proposal_topk: 32
+  target_topk: 32
+  feedback_stride: 4
+  feedback_stride_min: 4
+  feedback_union_cap: 96
+  tv_gate_low: 0.05
+  tv_gate_high: 0.20
+  horizon_weight_decay: 0.85
+  feedback_variance_beta: 0.99
+  feedback_rms_clip: 3.0
+
+  guard_calibration_rollouts: 20
+  guard_aal_drop_fraction: 0.05
+  guard_patience: 2
+  guard_disable_rollouts: 50
+
+aux_update:
+  mode: reliability_triggered
+  calibration_iterations: 20
+  check_interval: 20
+  min_records_per_head: 1024
+  trigger_z_high: 2.5
+  acceptance_drop_min: 0.05
+  patience: 2
+  cooldown_iterations: 50
+  max_heads_per_event: 2
+  mad_floor: 0.01
+
+  steps: 2
+  head_weight_max: 1.0
+  only_triggered_heads: true
+  reflex_cache_enabled: true
+  require_reflex_cache: true
+  max_cached_records: 4096
+  cache_stride: 4
+  reflex_record_microbatch_size: 64
+  validation_fraction: 0.10
+  max_validation_ce_regression: 0.01
+  rollback_on_validation_regression: true
+  distill_weight: 0.7
+  hard_token_weight: 0.3
+  proximal_kl_weight: 0.1
+  rollback_nonfinite_update: true
+  update_future_heads: true
+  update_fast_state_injections: false
+  update_feedback_projection: false
+  update_updater: false
+  update_backbone: false
+  update_lm_head: false
+
+checkpoint:
+  save_aux_every_grpo_iters: 100
+  save_aux_on_triggered_update: true
+  min_iters_between_aux_trigger_saves: 50
+  keep_last_aux_checkpoints: 3
+
+logging:
+  log_dir: logs/flashgrpo/reflexgrpo_optimized_qwen25_1p5b_simplelrabel3to5

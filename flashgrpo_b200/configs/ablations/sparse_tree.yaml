@@ -1,0 +1,4 @@
+inherits: ../flashgrpo_qwen25_1p5b_simplelrabel3to5.yaml
+flashgrpo:
+  tree_layout: sparse
+  TODO: v1 maps sparse to dense with a warning/TODO in code.

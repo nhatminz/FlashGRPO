@@ -1,0 +1,11 @@
+inherits: reflexgrpo_optimized_b200_qwen25_1p5b_simplelrabel3to5.yaml
+
+run_name: reflexgrpo_optimized_b200_fast_heads_qwen25_1p5b_simplelrabel3to5
+
+flashgrpo:
+  # Optional speed variant. Use only after a short default-config smoke run
+  # keeps acceptance stable, because this casts pretrained heads to bf16.
+  head_dtype: bf16
+
+logging:
+  log_dir: logs/flashgrpo_b200/reflexgrpo_optimized_b200_fast_heads_qwen25_1p5b_simplelrabel3to5

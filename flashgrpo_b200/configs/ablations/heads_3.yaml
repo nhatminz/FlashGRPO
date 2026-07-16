@@ -1,0 +1,4 @@
+inherits: ../flashgrpo_qwen25_1p5b_simplelrabel3to5.yaml
+flashgrpo:
+  num_medusa_heads: 3
+  max_tree_depth: 4

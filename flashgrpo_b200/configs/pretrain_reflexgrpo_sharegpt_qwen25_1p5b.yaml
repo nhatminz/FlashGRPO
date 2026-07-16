@@ -1,0 +1,37 @@
+inherits: pretrain_medusa_heads_sharegpt_qwen25_1p5b.yaml
+
+output_dir: outputs/reflexgrpo_heads_sharegpt_qwen25_1p5b_from_chain_1ep
+load_medusa_checkpoint: outputs/flashgrpo_medusa_sharegpt_qwen25_1p5b_chain_5ep/step14000
+train_reflex_only: true
+freeze_loaded_base_heads: true
+
+num_train_epochs: 1
+learning_rate: 1.0e-4
+warmup_steps: 100
+grad_clip_norm: 1.0
+save_steps: 1000
+
+num_medusa_heads: 3
+tie_lm_head: true
+medusa_loss_decay: 0.8
+
+chain_bottleneck_ratio: 8
+chain_gate_init: -2.0
+chain_loss_weight: 0.0
+chain_loss_max_depth: 3
+chain_bootstrap_from_medusa: true
+
+reflex_fast_state_dim: 128
+reflex_init_scale: 0.02
+reflex_loss_weight: 1.0
+reflex_loss_max_depth: 3
+reflex_top_m: 32
+reflex_delta_scale: 0.01
+reflex_correction_clip_norm: 1.0
+
+max_seq_len: 1024
+batch_size: 1
+gradient_accumulation_steps: 8
+loss_chunk_size: 64
+topk_metric: 5
+num_workers: 2

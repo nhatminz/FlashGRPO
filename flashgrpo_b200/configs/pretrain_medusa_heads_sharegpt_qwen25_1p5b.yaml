@@ -1,0 +1,37 @@
+model_name_or_path: /mnt/hdd/nhatminh/FastGRPO-main/models/Qwen2.5-1.5B-Instruct
+dataset_name: sharegpt
+dataset_path: /mnt/hdd/nhatminh/FastGRPO-main/data/sharegpt/ShareGPT_V4.3_unfiltered_cleaned_split.json
+dataset_split: train
+text_field: null
+conversation_format: sharegpt
+
+output_dir: outputs/flashgrpo_medusa_sharegpt_qwen25_1p5b
+seed: 42
+dtype: fp16
+head_dtype: fp32
+
+num_medusa_heads: 3
+tie_lm_head: true
+medusa_loss_decay: 0.8
+chain_bottleneck_ratio: 8
+chain_gate_init: -2.0
+chain_loss_weight: 0.30
+chain_loss_max_depth: 3
+chain_bootstrap_from_medusa: true
+
+max_seq_len: 1024
+num_samples: 0
+eval_size: 0
+batch_size: 1
+gradient_accumulation_steps: 8
+num_train_epochs: 1
+learning_rate: 5.0e-4
+warmup_steps: 100
+weight_decay: 0.0
+loss_chunk_size: 64
+topk_metric: 5
+grad_clip_norm: 1.0
+
+save_steps: 500
+eval_steps: 0
+num_workers: 2

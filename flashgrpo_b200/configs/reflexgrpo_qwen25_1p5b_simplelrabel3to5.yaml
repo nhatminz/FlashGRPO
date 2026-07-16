@@ -1,0 +1,69 @@
+inherits: flashgrpo_qwen25_1p5b_simplelrabel3to5.yaml
+
+method: reflexgrpo
+run_name: reflexgrpo_qwen25_1p5b_simplelrabel3to5
+aux_head_checkpoint: outputs/flashgrpo_medusa_sharegpt_qwen25_1p5b_chain_5ep/step14000
+
+flashgrpo:
+  chain_enable_after: 96
+  medusa_lr: 5.0e-5
+
+reflex:
+  enabled: true
+  fast_state_dim: 128
+  update_type: ema
+  beta: 0.95
+  eta: 0.05
+  top_m_feedback: 32
+  feedback_enabled: false
+  proposal_injection_enabled: false
+  proposal_injection_scale: 0.0
+  proposal_injection_after: 128
+  proposal_injection_warmup: 0
+  use_top_m_feedback: true
+  detach_feedback: true
+  init_scale: 0.0
+  feedback_clip_norm: 2.0
+  hidden_feedback_clip_norm: 0.0
+  fast_state_clip_norm: 6.0
+  correction_clip_norm: 1.0
+  normalize_correction: true
+  feedback_ce_gate: true
+  feedback_ce_tau: 4.0
+  feedback_ce_threshold: 0.4
+  normalize_feedback: true
+
+aux_update:
+  mode: reliability_triggered
+  interval: 1
+  steps: 1
+  reject_weight: 1.0
+  drift_threshold: 0.5
+  ce_tau: 4.0
+  ce_weight: 0.5
+  ema_beta: 0.90
+  min_mature_records: 64
+  head_weight_max: 2.0
+  only_triggered_heads: true
+  max_pending_jobs: 8
+  reflex_cache_enabled: true
+  require_reflex_cache: true
+  max_cached_records: 8192
+  reflex_record_microbatch_size: 256
+  defer_until_reflex_warmup_complete: true
+  rollback_nonfinite_update: true
+  update_future_heads: true
+  update_fast_state_injections: false
+  update_feedback_projection: false
+  update_updater: false
+  update_backbone: false
+  update_lm_head: false
+
+checkpoint:
+  save_aux_every_grpo_iters: 100
+  save_aux_on_triggered_update: true
+  min_iters_between_aux_trigger_saves: 50
+  keep_last_aux_checkpoints: 3
+
+logging:
+  log_dir: logs/flashgrpo/reflexgrpo_qwen25_1p5b_simplelrabel3to5

@@ -1,0 +1,9 @@
+inherits: flashgrpo_qwen25_1p5b_simplelrabel3to5.yaml
+run_name: flashgrpo_debug_recompute_cache
+flashgrpo:
+  cache_update_mode: recompute_accepted
+  require_pretrained_heads: false
+  allow_random_init: true
+  allow_recompute_fallback: true
+logging:
+  log_dir: logs/flashgrpo/flashgrpo_debug_recompute_cache

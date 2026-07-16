@@ -1,0 +1,12 @@
+inherits: flashgrpo_qwen25_1p5b_simplelrabel3to5.yaml
+run_name: flashgrpo_pretrained_heads_extractkv
+flashgrpo:
+  medusa_heads_checkpoint: outputs/flashgrpo_medusa_sharegpt_qwen25_1p5b
+  require_pretrained_heads: true
+  allow_random_init: false
+  online_medusa: true
+  cache_update_mode: extract_path
+  allow_recompute_fallback: true
+  tree_mode: concurrency_aware
+logging:
+  log_dir: logs/flashgrpo/flashgrpo_pretrained_heads_extractkv

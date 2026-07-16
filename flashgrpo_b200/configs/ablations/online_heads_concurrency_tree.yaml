@@ -1,0 +1,4 @@
+inherits: ../flashgrpo_qwen25_1p5b_simplelrabel3to5.yaml
+flashgrpo:
+  online_medusa: true
+  tree_mode: concurrency_aware
