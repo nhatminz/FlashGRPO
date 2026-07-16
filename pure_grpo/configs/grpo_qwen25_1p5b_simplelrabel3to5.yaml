@@ -1,0 +1,74 @@
+method: pure_grpo
+run_name: grpo_qwen25_1p5b_simplelrabel3to5
+seed: 42
+
+model:
+  model_dir: models/Qwen2.5-1.5B-Instruct
+  model_type: qwen2
+  dtype: fp16
+  attn_implementation: eager
+
+data:
+  train_option: simplelr_abel_level3to5
+
+generation:
+  do_sample: true
+  temperature: 1.0
+  top_p: 0.95
+  top_k:
+  max_prompt_length: 4096
+  max_length: 2048
+  repeated_generate_nums: 8
+
+training:
+  batch_size: 8
+  num_epochs: 1
+  start_epoch: 0
+  start_batch: 0
+  start_used_items: 0
+  start_rollout_count: 0
+  sample_num: 100
+  max_train_samples: 0
+  accumulation_steps: 4
+  grpo_iteration_num: 1
+  target_lr: 1.0e-6
+  beta: 0.04
+  epsilon: 0.1
+  max_training_padding_gap: 256
+  max_training_token: 2048
+  logps_chunk_size: 256
+  load_lora_path: ""
+  save_steps: 10
+  save_on_exception: true
+  num_workers: 4
+  persistent_workers: true
+  saved_model_dir: outputs/grpo_qwen25_1p5b_simplelrabel3to5/target_lora
+
+lora:
+  r: 64
+  alpha: 32
+  dropout: 0.0
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+runtime:
+  log_gpu_metrics: true
+  gpu_poll_interval_s: 10.0
+  empty_cache_enabled: true
+  empty_cache_after_target_train: true
+  empty_cache_threshold_mb: 18000
+  empty_cache_reserved_ratio: 1.4
+  generation_oom_split_retry: true
+  generation_oom_max_splits: 3
+
+logging:
+  log_dir: logs/pure_grpo/grpo_qwen25_1p5b_simplelrabel3to5
+  append: false
+  statistical_time: false
+
