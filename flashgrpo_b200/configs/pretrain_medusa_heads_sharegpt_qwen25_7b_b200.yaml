@@ -1,0 +1,42 @@
+model_name_or_path: models/Qwen2.5-7B-Instruct
+dataset_name: sharegpt
+dataset_path: data/sharegpt/ShareGPT_V4.3_unfiltered_cleaned_split.json
+dataset_split: train
+text_field: null
+conversation_format: sharegpt
+
+output_dir: outputs/flashgrpo_b200_medusa_sharegpt_qwen25_7b
+seed: 42
+dtype: bf16
+head_dtype: fp32
+attn_implementation: flash_attention_2
+
+num_medusa_heads: 3
+tie_lm_head: true
+medusa_loss_decay: 0.8
+
+# The optimized ReflexGRPO train config uses standard MEDUSA heads, not the
+# Chain-MEDUSA proposal path. Keep chain loss off for the checkpoint used by
+# train.sh.
+chain_bottleneck_ratio: 8
+chain_gate_init: -2.0
+chain_loss_weight: 0.0
+chain_loss_max_depth: 0
+chain_bootstrap_from_medusa: true
+
+max_seq_len: 1024
+num_samples: 0
+eval_size: 0
+batch_size: 4
+gradient_accumulation_steps: 4
+num_train_epochs: 1
+learning_rate: 3.0e-4
+warmup_steps: 100
+weight_decay: 0.0
+loss_chunk_size: 32
+topk_metric: 5
+grad_clip_norm: 1.0
+
+save_steps: 500
+eval_steps: 0
+num_workers: 8

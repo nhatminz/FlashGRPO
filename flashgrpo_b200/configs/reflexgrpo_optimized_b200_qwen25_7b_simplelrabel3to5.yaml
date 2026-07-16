@@ -1,0 +1,21 @@
+inherits: reflexgrpo_optimized_b200_qwen25_1p5b_simplelrabel3to5.yaml
+
+method: reflexgrpo_optimized_b200_qwen25_7b
+run_name: reflexgrpo_optimized_b200_qwen25_7b_simplelrabel3to5
+aux_head_checkpoint: outputs/flashgrpo_b200_medusa_sharegpt_qwen25_7b
+
+model:
+  model_dir: models/Qwen2.5-7B-Instruct
+  model_type: qwen2
+  dtype: bf16
+  attn_implementation: flash_attention_2
+
+training:
+  saved_model_dir: outputs/reflexgrpo_b200_qwen25_7b/target_lora
+  saved_medusa_dir: outputs/reflexgrpo_b200_qwen25_7b/medusa_heads
+
+flashgrpo:
+  medusa_heads_checkpoint: outputs/flashgrpo_b200_medusa_sharegpt_qwen25_7b
+
+logging:
+  log_dir: logs/flashgrpo_b200/reflexgrpo_b200_qwen25_7b

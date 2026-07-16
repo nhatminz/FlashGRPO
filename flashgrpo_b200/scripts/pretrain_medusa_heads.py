@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import math
 import random
@@ -35,6 +36,17 @@ def _dtype(name: str):
     if name == "fp32":
         return torch.float32
     raise ValueError(f"Unsupported dtype={name}")
+
+
+def _resolve_attn_implementation(requested: str | None) -> str:
+    requested = str(requested or "sdpa")
+    if requested == "flash_attention_2" and importlib.util.find_spec("flash_attn") is None:
+        print(
+            "Warning: attn_implementation=flash_attention_2 was requested, "
+            "but flash_attn is not installed. Falling back to sdpa."
+        )
+        return "sdpa"
+    return requested
 
 
 def _as_bool(value: Any) -> bool:
@@ -455,8 +467,14 @@ def main() -> None:
         tokenizer.pad_token = tokenizer.eos_token
     dtype = _dtype(cfg.get("dtype", "fp16"))
     head_dtype = _dtype(cfg.get("head_dtype", "fp32"))
+    attn_impl = _resolve_attn_implementation(cfg.get("attn_implementation", "sdpa"))
     hf_config = AutoConfig.from_pretrained(model_name_or_path)
-    model = AutoModelForCausalLM.from_pretrained(model_name_or_path, torch_dtype=dtype, config=hf_config).cuda().eval()
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name_or_path,
+        torch_dtype=dtype,
+        config=hf_config,
+        attn_implementation=attn_impl,
+    ).cuda().eval()
     model.requires_grad_(False)
     base = unwrap_causal_lm(model)
     load_medusa_checkpoint = str(cfg.get("load_medusa_checkpoint", "") or "")
