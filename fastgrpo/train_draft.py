@@ -1,3 +1,10 @@
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 import pandas as pd
 from transformers import AutoTokenizer, AutoProcessor,AutoConfig,AutoModelForCausalLM
 from helper.modeling_draft import Model
@@ -9,7 +16,6 @@ from torch.utils.data import DataLoader
 import torch.nn.functional as F
 from torch import nn
 import time
-from pathlib import Path
 import importlib.util
 
 from torch.utils.data import DataLoader, Dataset, Sampler
@@ -23,7 +29,6 @@ import json
 import pandas as pd
 import re
 import signal
-import sys
 import torch
 import argparse
 

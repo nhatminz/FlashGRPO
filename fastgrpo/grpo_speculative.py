@@ -1,4 +1,11 @@
 import os
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 import pandas as pd
 from transformers import AutoTokenizer,AutoConfig,AutoModelForCausalLM,GenerationConfig
 from helper.modeling_draft import Model
@@ -15,7 +22,6 @@ import numpy as np
 import json
 import pandas as pd
 import signal
-import sys
 import torch
 from copy import deepcopy
 from peft import get_peft_config, get_peft_model, LoraConfig, TaskType, PeftType
@@ -912,4 +918,3 @@ for epoch in range(num_epochs):
 
 model.save_model(f"{saved_draft_model_dir}/step{step}.pth")
 model.target_model.save_pretrained(f'{saved_model_dir}/step{step}')   
-
