@@ -3,6 +3,7 @@ import pandas as pd
 import math
 import json
 import os
+import random
 dir_key = "uids1103/data"
 
 prompt_dict = {
@@ -52,6 +53,26 @@ def _load_simplelr_parquet(path):
     })
     return ds.to_dict(orient='records')
 
+
+def select_train_subset(examples, fraction=1.0, max_samples=0, seed=42):
+    total = len(examples)
+    if total == 0:
+        return examples
+    fraction = float(1.0 if fraction is None else fraction)
+    if fraction <= 0:
+        raise ValueError(f"train_data_fraction must be > 0, got {fraction}")
+    target = total if fraction >= 1.0 else max(1, int(math.ceil(total * fraction)))
+    max_samples = int(max_samples or 0)
+    if max_samples > 0:
+        target = min(target, max_samples)
+    if target >= total:
+        return examples
+    rng = random.Random(int(seed))
+    indices = list(range(total))
+    rng.shuffle(indices)
+    indices = sorted(indices[:target])
+    return [examples[idx] for idx in indices]
+
 def get_test_QAs(option,tokenizer=None):
     
     if option == "amc-23":
@@ -85,7 +106,7 @@ def get_test_QAs(option,tokenizer=None):
         QAs = [{'question' : item['prompt'] , 'answer' : f"\\boxed{{{item['reward_model']['ground_truth']}}}" }for item in dataset]
     if tokenizer is None:
         return QAs
-    return QAs , DataCollator(tokenizer,prompt_dict[info[option]]['system_prompt'],prompt_dict[info[option]]['system_prompt']) 
+    return QAs , DataCollator(tokenizer,prompt_dict[info[option]]['system_prompt'],prompt_dict[info[option]]['system_prompt'])
 
 
 def get_train_QAs(option,tokenizer=None):
@@ -112,4 +133,4 @@ def get_train_QAs(option,tokenizer=None):
         QAs = [{'question' : item['prompt'] , 'answer' : f"\\boxed{{{item['reward_model']['ground_truth']}}}" }for item in dataset]
     if tokenizer is None:
         return QAs
-    return QAs , DataCollator(tokenizer,prompt_dict[info[option]]['system_prompt'],prompt_dict[info[option]]['system_prompt']) 
+    return QAs , DataCollator(tokenizer,prompt_dict[info[option]]['system_prompt'],prompt_dict[info[option]]['system_prompt'])
